@@ -396,15 +396,8 @@ impl ProgramCacheEntry {
         {
             #[cfg(feature = "metrics")]
             let jit_compile_time = Measure::start("jit_compile_time");
-            match executable.jit_compile() {
-                Ok(_) => {
-                    println!("DEBUG: [JIT] Success! Program is now natively compiled.");
-                }
-                Err(e) => {
-                    // 如果 JIT 失败，它会回退到解释器，所以这里通常是警告
-                    println!("DEBUG: [JIT] Failed to compile: {:?}. Falling back to interpreter.", e);
-                }
-            }
+            executable.jit_compile()?;
+            println!("executable.get_compiled_program(): {:#?}",executable.get_compiled_program());
             #[cfg(feature = "metrics")]
             {
                 metrics.jit_compile_us = jit_compile_time.end_as_us();
