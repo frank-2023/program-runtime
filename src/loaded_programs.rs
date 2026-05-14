@@ -397,7 +397,6 @@ impl ProgramCacheEntry {
             #[cfg(feature = "metrics")]
             let jit_compile_time = Measure::start("jit_compile_time");
             executable.jit_compile()?;
-            println!("executable.get_compiled_program(): {:#?}",executable.get_compiled_program());
             #[cfg(feature = "metrics")]
             {
                 metrics.jit_compile_us = jit_compile_time.end_as_us();

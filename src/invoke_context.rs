@@ -1,4 +1,3 @@
-use std::time::Instant;
 use {
     crate::{
         execution_budget::{SVMTransactionExecutionBudget, SVMTransactionExecutionCost},
@@ -505,15 +504,109 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
     }
 
     /// Calls the instruction's program entrypoint method
+    // fn process_executable_chain(
+    //     &mut self,
+    //     compute_units_consumed: &mut u64,
+    //     timings: &mut ExecuteTimings,
+    // ) -> Result<(), InstructionError> {
+    //     let instruction_context = self.transaction_context.get_current_instruction_context()?;
+    //     let process_executable_chain_time = Measure::start("process_executable_chain_time");
+    //     let builtin_id = {
+    //         let owner_id = instruction_context.get_program_owner()?;
+    //         if native_loader::check_id(&owner_id) {
+    //             *instruction_context.get_program_key()?
+    //         } else if bpf_loader_deprecated::check_id(&owner_id)
+    //             || bpf_loader::check_id(&owner_id)
+    //             || bpf_loader_upgradeable::check_id(&owner_id)
+    //             || loader_v4::check_id(&owner_id)
+    //         {
+    //             owner_id
+    //         } else {
+    //             return Err(InstructionError::UnsupportedProgramId);
+    //         }
+    //     };
+    //
+    //     // The Murmur3 hash value (used by RBPF) of the string "entrypoint"
+    //     const ENTRYPOINT_KEY: u32 = 0x71E3CF81;
+    //     let entry = self
+    //         .program_cache_for_tx_batch
+    //         .find(&builtin_id)
+    //         .ok_or(InstructionError::UnsupportedProgramId)?;
+    //     let function = match &entry.program {
+    //         ProgramCacheEntryType::Builtin(program) => program
+    //             .get_function_registry()
+    //             .lookup_by_key(ENTRYPOINT_KEY)
+    //             .map(|(_name, function)| function),
+    //         _ => None,
+    //     }
+    //     .ok_or(InstructionError::UnsupportedProgramId)?;
+    //     let program_id = *instruction_context.get_program_key()?;
+    //     self.transaction_context
+    //         .set_return_data(program_id, Vec::new())?;
+    //     let logger = self.get_log_collector();
+    //     stable_log::program_invoke(&logger, &program_id, self.get_stack_height());
+    //     let pre_remaining_units = self.get_remaining();
+    //     // In program-runtime v2 we will create this VM instance only once per transaction.
+    //     // `program_runtime_environment_v2.get_config()` will be used instead of `mock_config`.
+    //     // For now, only built-ins are invoked from here, so the VM and its Config are irrelevant.
+    //     let mock_config = Config::default();
+    //     let empty_memory_mapping =
+    //         MemoryMapping::new(Vec::new(), &mock_config, SBPFVersion::V0).unwrap();
+    //     let mut vm = EbpfVm::new(
+    //         self.environment_config
+    //             .program_runtime_environments_for_execution
+    //             .program_runtime_v2
+    //             .clone(),
+    //         SBPFVersion::V0,
+    //         // Removes lifetime tracking
+    //         unsafe { std::mem::transmute::<&mut InvokeContext, &mut InvokeContext>(self) },
+    //         empty_memory_mapping,
+    //         0,
+    //     );
+    //     vm.invoke_function(function);
+    //     let result = match vm.program_result {
+    //         ProgramResult::Ok(_) => {
+    //             stable_log::program_success(&logger, &program_id);
+    //             Ok(())
+    //         }
+    //         ProgramResult::Err(ref err) => {
+    //             if let EbpfError::SyscallError(syscall_error) = err {
+    //                 if let Some(instruction_err) = syscall_error.downcast_ref::<InstructionError>()
+    //                 {
+    //                     stable_log::program_failure(&logger, &program_id, instruction_err);
+    //                     Err(instruction_err.clone())
+    //                 } else {
+    //                     stable_log::program_failure(&logger, &program_id, syscall_error);
+    //                     Err(InstructionError::ProgramFailedToComplete)
+    //                 }
+    //             } else {
+    //                 stable_log::program_failure(&logger, &program_id, err);
+    //                 Err(InstructionError::ProgramFailedToComplete)
+    //             }
+    //         }
+    //     };
+    //     let post_remaining_units = self.get_remaining();
+    //     *compute_units_consumed = pre_remaining_units.saturating_sub(post_remaining_units);
+    //
+    //     if builtin_id == program_id && result.is_ok() && *compute_units_consumed == 0 {
+    //         return Err(InstructionError::BuiltinProgramsMustConsumeComputeUnits);
+    //     }
+    //
+    //     timings
+    //         .execute_accessories
+    //         .process_instructions
+    //         .process_executable_chain_us += process_executable_chain_time.end_as_us();
+    //     result
+    // }
+
     fn process_executable_chain(
         &mut self,
         compute_units_consumed: &mut u64,
         timings: &mut ExecuteTimings,
     ) -> Result<(), InstructionError> {
-        let start = Instant::now();
         let instruction_context = self.transaction_context.get_current_instruction_context()?;
         let process_executable_chain_time = Measure::start("process_executable_chain_time");
-        println!("instruction_context : {:?}",start.elapsed().as_nanos());
+
         let builtin_id = {
             let owner_id = instruction_context.get_program_owner()?;
             if native_loader::check_id(&owner_id) {
@@ -529,58 +622,69 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
             }
         };
 
-        println!("builtin_id : {:?}",start.elapsed().as_nanos());
-        // The Murmur3 hash value (used by RBPF) of the string "entrypoint"
-        const ENTRYPOINT_KEY: u32 = 0x71E3CF81;
         let entry = self
             .program_cache_for_tx_batch
             .find(&builtin_id)
             .ok_or(InstructionError::UnsupportedProgramId)?;
-        let function = match &entry.program {
-            ProgramCacheEntryType::Builtin(program) => program
-                .get_function_registry()
-                .lookup_by_key(ENTRYPOINT_KEY)
-                .map(|(_name, function)| function),
-            _ => None,
-        }
-        .ok_or(InstructionError::UnsupportedProgramId)?;
-        println!("function : {:?}",start.elapsed().as_nanos());
+
         let program_id = *instruction_context.get_program_key()?;
-        self.transaction_context
-            .set_return_data(program_id, Vec::new())?;
+        self.transaction_context.set_return_data(program_id, Vec::new())?;
         let logger = self.get_log_collector();
         stable_log::program_invoke(&logger, &program_id, self.get_stack_height());
+
         let pre_remaining_units = self.get_remaining();
-        println!("program_invoke : {:?}",start.elapsed().as_nanos());
-        // In program-runtime v2 we will create this VM instance only once per transaction.
-        // `program_runtime_environment_v2.get_config()` will be used instead of `mock_config`.
-        // For now, only built-ins are invoked from here, so the VM and its Config are irrelevant.
+
+        // 获取配置和内存映射
+        // 注意：如果是 Loaded 程序，建议使用 executable.get_config() 而不是 Config::default()
         let mock_config = Config::default();
-        let empty_memory_mapping =
-            MemoryMapping::new(Vec::new(), &mock_config, SBPFVersion::V0).unwrap();
+        let empty_memory_mapping = MemoryMapping::new(Vec::new(), &mock_config, SBPFVersion::V0).unwrap();
+
         let mut vm = EbpfVm::new(
             self.environment_config
                 .program_runtime_environments_for_execution
                 .program_runtime_v2
                 .clone(),
             SBPFVersion::V0,
-            // Removes lifetime tracking
             unsafe { std::mem::transmute::<&mut InvokeContext, &mut InvokeContext>(self) },
             empty_memory_mapping,
             0,
         );
-        println!("vm : {:?}",start.elapsed().as_nanos());
-        vm.invoke_function(function);
-        println!("invoke_function : {:?}",start.elapsed().as_nanos());
-        let result = match vm.program_result {
+
+        // --- 修改核心逻辑开始 ---
+        let result = match &entry.program {
+            ProgramCacheEntryType::Builtin(program) => {
+                // 情况 A: 如果是原生内置程序，依然使用 invoke_function
+                const ENTRYPOINT_KEY: u32 = 0x71E3CF81;
+                let function = program
+                    .get_function_registry()
+                    .lookup_by_key(ENTRYPOINT_KEY)
+                    .map(|(_name, function)| function)
+                    .ok_or(InstructionError::UnsupportedProgramId)?;
+
+                vm.invoke_function(function);
+                // Builtin 的结果直接存储在 vm.program_result 中
+                let mut res = ProgramResult::Ok(0);
+                std::mem::swap(&mut res, &mut vm.program_result);
+                res
+            }
+            ProgramCacheEntryType::Loaded(executable) => {
+                // 情况 B: 如果是 BPF 加载的程序，使用 execute_program
+                // 第二个参数 interpreted: false 表示使用 JIT (如果已编译)
+                let (_instruction_count, res) = vm.execute_program(executable, false);
+                res
+            }
+            _ => return Err(InstructionError::UnsupportedProgramId),
+        };
+        // --- 修改核心逻辑结束 ---
+
+        let final_result = match result {
             ProgramResult::Ok(_) => {
                 stable_log::program_success(&logger, &program_id);
                 Ok(())
             }
             ProgramResult::Err(ref err) => {
                 if let EbpfError::SyscallError(syscall_error) = err {
-                    if let Some(instruction_err) = syscall_error.downcast_ref::<InstructionError>()
-                    {
+                    if let Some(instruction_err) = syscall_error.downcast_ref::<InstructionError>() {
                         stable_log::program_failure(&logger, &program_id, instruction_err);
                         Err(instruction_err.clone())
                     } else {
@@ -593,19 +697,16 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                 }
             }
         };
+
         let post_remaining_units = self.get_remaining();
         *compute_units_consumed = pre_remaining_units.saturating_sub(post_remaining_units);
 
-        if builtin_id == program_id && result.is_ok() && *compute_units_consumed == 0 {
+        if builtin_id == program_id && final_result.is_ok() && *compute_units_consumed == 0 {
             return Err(InstructionError::BuiltinProgramsMustConsumeComputeUnits);
         }
 
-        timings
-            .execute_accessories
-            .process_instructions
-            .process_executable_chain_us += process_executable_chain_time.end_as_us();
-        println!("end : {:?}",start.elapsed().as_nanos());
-        result
+        timings.execute_accessories.process_instructions.process_executable_chain_us += process_executable_chain_time.end_as_us();
+        final_result
     }
 
     /// Get this invocation's LogCollector
