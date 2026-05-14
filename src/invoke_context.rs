@@ -625,7 +625,9 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
         } else {
             return Err(InstructionError::UnsupportedProgramId);
         };
-
+        println!("self
+            .program_cache_for_tx_batch: {:#?}",self
+            .program_cache_for_tx_batch);
         // 3. 在缓存中查找
         let entry = self
             .program_cache_for_tx_batch
