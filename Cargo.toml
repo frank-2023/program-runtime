@@ -14,12 +14,6 @@ edition = "2021"
 name = "solana-program-runtime"
 version = "3.1.11"
 authors = ["Anza Maintainers <maintainers@anza.xyz>"]
-build = false
-autolib = false
-autobins = false
-autoexamples = false
-autotests = false
-autobenches = false
 description = "Solana program runtime"
 homepage = "https://anza.xyz/"
 documentation = "https://docs.rs/solana-program-runtime"
@@ -30,24 +24,17 @@ repository = "https://github.com/anza-xyz/agave"
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]
 
+[lib]
+crate-type = ["lib"]
+name = "solana_program_runtime"
+
 [features]
 agave-unstable-api = []
 dev-context-only-utils = []
 dummy-for-ci-check = ["metrics"]
-frozen-abi = [
-    "dep:solana-frozen-abi",
-    "dep:solana-frozen-abi-macro",
-]
+frozen-abi = ["dep:solana-frozen-abi", "dep:solana-frozen-abi-macro"]
 metrics = []
-shuttle-test = [
-    "solana-sbpf/shuttle-test",
-    "solana-svm-type-overrides/shuttle-test",
-]
-
-[lib]
-name = "solana_program_runtime"
-crate-type = ["lib"]
-path = "src/lib.rs"
+shuttle-test = ["solana-sbpf/shuttle-test", "solana-svm-type-overrides/shuttle-test"]
 
 [dependencies.base64]
 version = "0.22.1"
@@ -117,7 +104,6 @@ version = "3.1.0"
 
 [dependencies.solana-pubkey]
 version = "3.0.0"
-default-features = false
 
 [dependencies.solana-rent]
 version = "3.0.0"
@@ -125,7 +111,6 @@ version = "3.0.0"
 [dependencies.solana-sbpf]
 version = "=0.13.1"
 features = ["jit"]
-default-features = false
 
 [dependencies.solana-sdk-ids]
 version = "3.0.0"
