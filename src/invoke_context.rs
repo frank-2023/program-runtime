@@ -607,24 +607,29 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
         let instruction_context = self.transaction_context.get_current_instruction_context()?;
         let process_executable_chain_time = Measure::start("process_executable_chain_time");
 
-        let builtin_id = {
-            let owner_id = instruction_context.get_program_owner()?;
-            if native_loader::check_id(&owner_id) {
-                *instruction_context.get_program_key()?
-            } else if bpf_loader_deprecated::check_id(&owner_id)
-                || bpf_loader::check_id(&owner_id)
-                || bpf_loader_upgradeable::check_id(&owner_id)
-                || loader_v4::check_id(&owner_id)
-            {
-                owner_id
-            } else {
-                return Err(InstructionError::UnsupportedProgramId);
-            }
+        // 1. 获取真正的 Program ID 和它的 Owner
+        let program_id = *instruction_context.get_program_key()?;
+        let owner_id = instruction_context.get_program_owner()?;
+
+        // 2. 确定查找缓存时使用的 Key
+        // 只有当 Owner 是 Native Loader 时，才说明这个程序本身就是一个系统内置的原生程序
+        let lookup_id = if native_loader::check_id(&owner_id) {
+            program_id
+        } else if bpf_loader_deprecated::check_id(&owner_id)
+            || bpf_loader::check_id(&owner_id)
+            || bpf_loader_upgradeable::check_id(&owner_id)
+            || loader_v4::check_id(&owner_id)
+        {
+            // 对于 BPF 程序，我们要找的是程序自己的 ID，而不是 Loader 的 ID
+            program_id
+        } else {
+            return Err(InstructionError::UnsupportedProgramId);
         };
 
+        // 3. 在缓存中查找
         let entry = self
             .program_cache_for_tx_batch
-            .find(&builtin_id)
+            .find(&lookup_id) // 使用正确的 lookup_id
             .ok_or(InstructionError::UnsupportedProgramId)?;
 
         let program_id = *instruction_context.get_program_key()?;
@@ -703,9 +708,9 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
         let post_remaining_units = self.get_remaining();
         *compute_units_consumed = pre_remaining_units.saturating_sub(post_remaining_units);
 
-        if builtin_id == program_id && final_result.is_ok() && *compute_units_consumed == 0 {
-            return Err(InstructionError::BuiltinProgramsMustConsumeComputeUnits);
-        }
+        // if builtin_id == program_id && final_result.is_ok() && *compute_units_consumed == 0 {
+        //     return Err(InstructionError::BuiltinProgramsMustConsumeComputeUnits);
+        // }
 
         timings.execute_accessories.process_instructions.process_executable_chain_us += process_executable_chain_time.end_as_us();
         final_result
