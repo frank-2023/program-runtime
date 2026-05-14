@@ -653,6 +653,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
         // --- 修改核心逻辑开始 ---
         let result = match &entry.program {
             ProgramCacheEntryType::Builtin(program) => {
+                println!("invoke_function");
                 // 情况 A: 如果是原生内置程序，依然使用 invoke_function
                 const ENTRYPOINT_KEY: u32 = 0x71E3CF81;
                 let function = program
@@ -668,6 +669,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                 res
             }
             ProgramCacheEntryType::Loaded(executable) => {
+                println!("execute_program");
                 // 情况 B: 如果是 BPF 加载的程序，使用 execute_program
                 // 第二个参数 interpreted: false 表示使用 JIT (如果已编译)
                 let (_instruction_count, res) = vm.execute_program(executable, false);
