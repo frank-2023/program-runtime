@@ -14,6 +14,12 @@ edition = "2021"
 name = "solana-program-runtime"
 version = "3.1.11"
 authors = ["Anza Maintainers <maintainers@anza.xyz>"]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "Solana program runtime"
 homepage = "https://anza.xyz/"
 documentation = "https://docs.rs/solana-program-runtime"
@@ -24,17 +30,24 @@ repository = "https://github.com/anza-xyz/agave"
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]
 
-[lib]
-crate-type = ["lib"]
-name = "solana_program_runtime"
-
 [features]
 agave-unstable-api = []
 dev-context-only-utils = []
 dummy-for-ci-check = ["metrics"]
-frozen-abi = ["dep:solana-frozen-abi", "dep:solana-frozen-abi-macro"]
+frozen-abi = [
+    "dep:solana-frozen-abi",
+    "dep:solana-frozen-abi-macro",
+]
 metrics = []
-shuttle-test = ["solana-sbpf/shuttle-test", "solana-svm-type-overrides/shuttle-test"]
+shuttle-test = [
+    "solana-sbpf/shuttle-test",
+    "solana-svm-type-overrides/shuttle-test",
+]
+
+[lib]
+name = "solana_program_runtime"
+crate-type = ["lib"]
+path = "src/lib.rs"
 
 [dependencies.base64]
 version = "0.22.1"
