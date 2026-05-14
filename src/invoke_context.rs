@@ -667,6 +667,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
             ProgramCacheEntryType::Loaded(executable) => {
                 // Loaded 模式：BPF/JIT 执行
                 println!("Loaded");
+                println!("executable: {:#?}",executable.get_compiled_program());
                 let config = executable.get_config();
                 let sbpf_version = executable.get_sbpf_version();
 
