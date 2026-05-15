@@ -1,5 +1,4 @@
-use solana_sbpf::ebpf;
-use solana_sbpf::memory_region::MemoryRegion;
+
 use {
     crate::{
         execution_budget::{SVMTransactionExecutionBudget, SVMTransactionExecutionCost},
@@ -21,7 +20,7 @@ use {
         error::{EbpfError, ProgramResult},
         memory_region::MemoryMapping,
         program::{BuiltinFunction, SBPFVersion},
-        vm::{Config, ContextObject, EbpfVm},
+        vm::{ContextObject, EbpfVm},
     },
     solana_sdk_ids::{
         bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, loader_v4, native_loader, sysvar,
@@ -606,134 +605,167 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
         compute_units_consumed: &mut u64,
         timings: &mut ExecuteTimings,
     ) -> Result<(), InstructionError> {
-        let instruction_context = self.transaction_context.get_current_instruction_context()?;
-        let process_executable_chain_time = Measure::start("process_executable_chain_time");
+        const ENTRYPOINT_KEY: u32 = 0x71E3CF81;
 
-        // 1. 获取 Program ID
+        let instruction_context =
+            self.transaction_context.get_current_instruction_context()?;
+
+        let process_executable_chain_time =
+            Measure::start("process_executable_chain_time");
+
         let program_id = *instruction_context.get_program_key()?;
+
         let owner_id = instruction_context.get_program_owner()?;
 
-        // 2. 统一使用 program_id 在缓存中查找（租客模式，而非房东模式）
-        let lookup_id = if native_loader::check_id(&owner_id)
-            || bpf_loader_deprecated::check_id(&owner_id)
+        let builtin_id = if native_loader::check_id(&owner_id) {
+            program_id
+        } else if bpf_loader_deprecated::check_id(&owner_id)
             || bpf_loader::check_id(&owner_id)
             || bpf_loader_upgradeable::check_id(&owner_id)
             || loader_v4::check_id(&owner_id)
         {
-            program_id
+            owner_id
         } else {
             return Err(InstructionError::UnsupportedProgramId);
         };
 
         let entry = self
             .program_cache_for_tx_batch
-            .find(&lookup_id)
+            .find(&builtin_id)
             .ok_or(InstructionError::UnsupportedProgramId)?;
 
-        // 设置返回数据和日志
-        self.transaction_context.set_return_data(program_id, Vec::new())?;
+        self.transaction_context
+            .set_return_data(program_id, Vec::new())?;
+
         let logger = self.get_log_collector();
-        stable_log::program_invoke(&logger, &program_id, self.get_stack_height());
+
+        stable_log::program_invoke(
+            &logger,
+            &program_id,
+            self.get_stack_height(),
+        );
 
         let pre_remaining_units = self.get_remaining();
 
-        // 3. 根据程序类型执行逻辑
-        let result = match &entry.program {
-            ProgramCacheEntryType::Builtin(program) => {
-                // Builtin 模式：原生 Rust 执行
-                println!("Builtin");
-                let mock_config = Config::default();
-                let empty_memory_mapping = MemoryMapping::new(Vec::new(), &mock_config, SBPFVersion::V0).unwrap();
-                let mut vm = EbpfVm::new(
-                    self.environment_config.program_runtime_environments_for_execution.program_runtime_v2.clone(),
-                    SBPFVersion::V0,
-                    unsafe { std::mem::transmute::<&mut InvokeContext, &mut InvokeContext>(self) },
-                    empty_memory_mapping,
-                    0,
-                );
+        let runtime_env = self
+            .environment_config
+            .program_runtime_environments_for_execution
+            .program_runtime_v2
+            .clone();
 
-                const ENTRYPOINT_KEY: u32 = 0x71E3CF81;
+        let config = self
+            .environment_config
+            .program_runtime_environments_for_execution
+            .program_runtime_v2.get_config();
+
+        let empty_memory_mapping = MemoryMapping::new(
+            Vec::new(),
+            config,
+            SBPFVersion::V0,
+        )
+            .map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
+
+        let mut vm = EbpfVm::new(
+            runtime_env,
+            SBPFVersion::V0,
+            unsafe {
+                std::mem::transmute::<
+                    &mut InvokeContext,
+                    &mut InvokeContext,
+                >(self)
+            },
+            empty_memory_mapping,
+            0,
+        );
+
+        match &entry.program {
+            ProgramCacheEntryType::Builtin(program) => {
+                println!("Builtin");
                 let function = program
                     .get_function_registry()
                     .lookup_by_key(ENTRYPOINT_KEY)
-                    .map(|(_name, function)| function)
+                    .map(|(_, function)| function)
                     .ok_or(InstructionError::UnsupportedProgramId)?;
 
                 vm.invoke_function(function);
-                let mut res = ProgramResult::Ok(0);
-                std::mem::swap(&mut res, &mut vm.program_result);
-                res
             }
+
             ProgramCacheEntryType::Loaded(executable) => {
-                // Loaded 模式：BPF/JIT 执行
                 println!("Loaded");
-                println!("executable: {:#?}",executable.get_compiled_program());
-                let config = executable.get_config();
-                let sbpf_version = executable.get_sbpf_version();
-
-                // --- 构建真实的内存映射 ---
-                let mut regions = Vec::with_capacity(2);
-                // A. 代码/常量段 (只读)
-                regions.push(executable.get_ro_region());
-
-                // B. 堆栈段 (读写)
-                let stack_size = config.stack_size();
-                let mut stack = vec![0u64; stack_size / 8];
-                regions.push(MemoryRegion::new_writable(
-                    unsafe { std::slice::from_raw_parts_mut(stack.as_mut_ptr() as *mut u8, stack_size) },
-                    ebpf::MM_STACK_START,
-                ));
-
-                let memory_mapping = MemoryMapping::new(
-                    regions,
-                    config,
-                    sbpf_version,
-                ).map_err(|_| InstructionError::ProgramFailedToComplete)?;
-
-                // C. 创建 VM 实例
-                let mut vm = EbpfVm::new(
-                    executable.get_loader().clone(),
-                    sbpf_version,
-                    unsafe { std::mem::transmute::<&mut InvokeContext, &mut InvokeContext>(self) },
-                    memory_mapping,
-                    stack_size,
-                );
-
-                // D. 执行程序 (interpreted: false 启用 JIT)
-                let (_instruction_count, res) = vm.execute_program(executable, false);
-                res
+                vm.execute_program(executable, true);
             }
-            _ => return Err(InstructionError::UnsupportedProgramId),
-        };
 
-        // 4. 后处理结果
-        let final_result = match result {
+            _ => {
+                return Err(InstructionError::UnsupportedProgramId);
+            }
+        }
+
+        let result = match vm.program_result {
             ProgramResult::Ok(_) => {
                 stable_log::program_success(&logger, &program_id);
                 Ok(())
             }
+
             ProgramResult::Err(ref err) => {
-                if let EbpfError::SyscallError(syscall_error) = err {
-                    if let Some(instruction_err) = syscall_error.downcast_ref::<InstructionError>() {
-                        stable_log::program_failure(&logger, &program_id, instruction_err);
-                        Err(instruction_err.clone())
-                    } else {
-                        stable_log::program_failure(&logger, &program_id, syscall_error);
+                match err {
+                    EbpfError::SyscallError(syscall_error) => {
+                        if let Some(instruction_err) =
+                            syscall_error.downcast_ref::<InstructionError>()
+                        {
+                            stable_log::program_failure(
+                                &logger,
+                                &program_id,
+                                instruction_err,
+                            );
+
+                            Err(instruction_err.clone())
+                        } else {
+                            stable_log::program_failure(
+                                &logger,
+                                &program_id,
+                                syscall_error,
+                            );
+
+                            Err(InstructionError::ProgramFailedToComplete)
+                        }
+                    }
+
+                    _ => {
+                        stable_log::program_failure(
+                            &logger,
+                            &program_id,
+                            err,
+                        );
+
                         Err(InstructionError::ProgramFailedToComplete)
                     }
-                } else {
-                    stable_log::program_failure(&logger, &program_id, err);
-                    Err(InstructionError::ProgramFailedToComplete)
                 }
             }
         };
 
         let post_remaining_units = self.get_remaining();
-        *compute_units_consumed = pre_remaining_units.saturating_sub(post_remaining_units);
 
-        timings.execute_accessories.process_instructions.process_executable_chain_us += process_executable_chain_time.end_as_us();
-        final_result
+        *compute_units_consumed =
+            pre_remaining_units.saturating_sub(post_remaining_units);
+
+        if builtin_id == program_id
+            && result.is_ok()
+            && *compute_units_consumed == 0
+        {
+            return Err(
+                InstructionError::BuiltinProgramsMustConsumeComputeUnits,
+            );
+        }
+
+        timings
+            .execute_accessories
+            .process_instructions
+            .process_executable_chain_us +=
+            process_executable_chain_time.end_as_us();
+
+        result
     }
+
 
     /// Get this invocation's LogCollector
     pub fn get_log_collector(&self) -> Option<Rc<RefCell<LogCollector>>> {
