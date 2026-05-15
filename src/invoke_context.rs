@@ -746,7 +746,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                 vm = EbpfVm::new(
                     runtime_env,
                     executable.get_sbpf_version(),
-                    unsafe { std::mem::transmute::<&mut InvokeContext, &mut InvokeContext>(self) },
+                    unsafe { std::mem::transmute(self) }, // 绑定 InvokeContext
                     memory_mapping,
                     stack_size, // 必须与 regions 里的堆栈大小一致
                 );
