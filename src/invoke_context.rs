@@ -631,7 +631,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
 
         let entry = self
             .program_cache_for_tx_batch
-            .find(&builtin_id)
+            .find(&program_id)
             .ok_or(InstructionError::UnsupportedProgramId)?;
 
         self.transaction_context
