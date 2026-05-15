@@ -700,7 +700,8 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                 let stricter_abi_and_runtime_constraints = self
                     .get_feature_set()
                     .stricter_abi_and_runtime_constraints;
-                let account_data_direct_mapping = self.get_feature_set().account_data_direct_mapping;
+                let account_data_direct_mapping =
+                    self.get_feature_set().account_data_direct_mapping;
                 let mask_out_rent_epoch_in_vm_serialization = self
                     .get_feature_set()
                     .mask_out_rent_epoch_in_vm_serialization;
@@ -708,82 +709,95 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                     .get_feature_set()
                     .provide_instruction_data_offset_in_vm_r2;
 
-                let (parameter_bytes, additional_regions, accounts_metadata, instruction_data_offset) =
+                let (_parameter_bytes, regions, accounts_metadata, instruction_data_offset) =
                     serialization::serialize_parameters(
                         &instruction_context,
                         stricter_abi_and_runtime_constraints,
                         account_data_direct_mapping,
                         mask_out_rent_epoch_in_vm_serialization,
-                    )?;
+                    )
+                        .map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
 
-                // --- 核心修复：添加代码段 ---
-                // 代码段（RO Region）必须存在，否则 VM 没法读指令
                 let stack_size = executable.get_config().stack_size();
-                let heap_size = self.get_compute_budget().heap_size; // 默认通常是 32KB
-                let mut heap = vec![0u8; heap_size as usize]; // 别忘了分配堆内存
-                // 3. 准备堆栈空间 (严格对齐生命周期)
+                let heap_size = self.get_compute_budget().heap_size;
+
+                // 扣堆的 CU 费用
+                {
+                    const KIBIBYTE: u64 = 1024;
+                    const PAGE_SIZE_KB: u64 = 32;
+                    let mut rounded = u64::from(heap_size);
+                    rounded = rounded.saturating_add(
+                        PAGE_SIZE_KB.saturating_mul(KIBIBYTE).saturating_sub(1)
+                    );
+                    let heap_cost = rounded
+                        .checked_div(PAGE_SIZE_KB.saturating_mul(KIBIBYTE))
+                        .unwrap()
+                        .saturating_sub(1)
+                        .saturating_mul(self.get_execution_cost().heap_cost);
+                    self.consume_checked(heap_cost)
+                        .map_err(|_| InstructionError::ComputationalBudgetExceeded)?;
+                }
+
                 let mut stack = vec![0u8; stack_size];
-                self.set_syscall_context(SyscallContext {
-                    allocator: BpfAllocator::new(heap_size as u64),
-                    accounts_metadata: accounts_metadata.clone(),
-                })?;
-                // 5. 组装 Regions (核心：严格遵循官方 create_memory_mapping 顺序)
-                let gap = if !executable.get_sbpf_version().dynamic_stack_frames() && config.enable_stack_frame_gaps {
+                let mut heap = vec![0u8; heap_size as usize];
+
+                // 手动展开 create_vm 函数逻辑
+                let gap = if !executable.get_sbpf_version().dynamic_stack_frames()
+                    && config.enable_stack_frame_gaps
+                {
                     config.stack_frame_size as u64
                 } else {
                     0
                 };
-                let mut regions = vec![
-                    executable.get_ro_region(), // 0: 只读代码段
-                    MemoryRegion::new_writable_gapped(
-                        &mut stack,
-                        ebpf::MM_STACK_START,
-                        gap,
-                    ),                          // 1: 栈段 (带 Gap)
-                    MemoryRegion::new_writable(
-                        &mut heap,
-                        ebpf::MM_HEAP_START
-                    ),                          // 2: 堆段 (必须在这里！)
-                ];
 
-                // 6. 将序列化产生的账户数据 (additional_regions) 拼接在最后
-                regions.extend(additional_regions);
+                let memory_regions: Vec<MemoryRegion> = vec![
+                    executable.get_ro_region(),
+                    MemoryRegion::new_writable_gapped(&mut stack, ebpf::MM_STACK_START, gap),
+                    MemoryRegion::new_writable(&mut heap, ebpf::MM_HEAP_START),
+                ]
+                    .into_iter()
+                    .chain(regions)
+                    .collect();
 
-                // 3. 构建映射（这次包含了代码、数据、堆栈、堆）
-                let memory_mapping = MemoryMapping::new(
-                    regions,
+                let memory_mapping = MemoryMapping::new_with_access_violation_handler(
+                    memory_regions,
                     config,
                     executable.get_sbpf_version(),
-                ).map_err(|e| {
-                    // 建议打印 e，如果是地址冲突，会显示具体的 AccessViolation 详情
-                    println!("MemoryMapping 错误详情: {:?}", e);
-                    InstructionError::ProgramEnvironmentSetupFailure
-                })?;
+                    self.transaction_context.access_violation_handler(
+                        stricter_abi_and_runtime_constraints,
+                        account_data_direct_mapping,
+                    ),
+                )
+                    .map_err(|e| {
+                        println!("MemoryMapping error: {:?}", e);
+                        InstructionError::ProgramEnvironmentSetupFailure
+                    })?;
 
-                // 4. 初始化虚拟机
-                vm = EbpfVm::new(
+                self.set_syscall_context(SyscallContext {
+                    allocator: BpfAllocator::new(heap_size as u64),
+                    accounts_metadata,
+                })
+                    .map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
+
+                // EbpfVm::new 内部已经正确设置了 R10，不要手动设
+                let mut vm_inner = EbpfVm::new(
                     runtime_env,
                     executable.get_sbpf_version(),
-                    unsafe { std::mem::transmute::<&mut InvokeContext, &mut InvokeContext>(self) },
+                    unsafe {
+                        std::mem::transmute::<&mut InvokeContext, &mut InvokeContext>(self)
+                    },
                     memory_mapping,
-                    stack_size, // 必须与 regions 里的堆栈大小一致
+                    stack_size,
                 );
 
-                // 5. 设置寄存器 (R1, R2, R10 是程序启动的三大支柱)
-                vm.registers[1] = ebpf::MM_INPUT_START;
+                vm_inner.registers[1] = ebpf::MM_INPUT_START;
                 if provide_instruction_data_offset_in_vm_r2 {
-                    vm.registers[2] = instruction_data_offset as u64;
+                    vm_inner.registers[2] = instruction_data_offset as u64;
                 }
-                // R10 是栈指针，必须指向栈底（最高地址）
-                vm.registers[10] = ebpf::MM_STACK_START + stack_size as u64;
-                println!("config.enable_instruction_meter: {:?}",config.enable_instruction_meter);
-                // 6. 运行
-                let re = vm.execute_program(executable, false);
 
-                println!("Executing instructions: {:?}",re);
-                // 5. 【核心修复 B】将内存结果写回账户
-                println!("parameter_bytes: {:#?}",parameter_bytes.len());
-                println!("accounts_metadata: {:?}",accounts_metadata.len());
+                let (cus, result) = vm_inner.execute_program(executable, true);
+                println!("CU consumed: {}, result: {:?}", cus, result);
+                vm = vm_inner;
             }
 
             _ => {
