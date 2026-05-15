@@ -696,7 +696,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
             }
 
             ProgramCacheEntryType::Loaded(executable) => {
-                println!("Loaded");
+                // println!("Loaded");
                 let stricter_abi_and_runtime_constraints = self
                     .get_feature_set()
                     .stricter_abi_and_runtime_constraints;
@@ -795,8 +795,8 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                     vm_inner.registers[2] = instruction_data_offset as u64;
                 }
 
-                let (cus, result) = vm_inner.execute_program(executable, true);
-                println!("CU consumed: {}, result: {:?}", cus, result);
+                let _ = vm_inner.execute_program(executable, true);
+                // println!("CU consumed: {}, result: {:?}", cus, result);
                 vm = vm_inner;
             }
 
