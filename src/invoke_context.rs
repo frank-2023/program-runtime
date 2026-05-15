@@ -708,13 +708,14 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                     .get_feature_set()
                     .provide_instruction_data_offset_in_vm_r2;
 
-                let (_, mut regions, _, instruction_data_offset) =
+                let (parameter_bytes, mut regions, accounts_metadata, instruction_data_offset) =
                     serialization::serialize_parameters(
                         &instruction_context,
                         stricter_abi_and_runtime_constraints,
                         account_data_direct_mapping,
                         mask_out_rent_epoch_in_vm_serialization,
                     )?;
+
                 // --- 核心修复：添加代码段 ---
                 // 代码段（RO Region）必须存在，否则 VM 没法读指令
                 regions.insert(0, executable.get_ro_region());
@@ -758,6 +759,15 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
 
                 // 6. 运行
                 vm.execute_program(executable, false);
+
+                let m = self
+                    .get_syscall_context()
+                    .map(|s| s.accounts_metadata.clone())
+                    .unwrap_or_default();
+                // 5. 【核心修复 B】将内存结果写回账户
+                println!("parameter_bytes: {:#?}",parameter_bytes.len());
+                println!("accounts_metadata: {:?}",accounts_metadata.len());
+                println!("m: {:?}",m);
             }
 
             _ => {
