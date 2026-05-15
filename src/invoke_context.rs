@@ -651,26 +651,27 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
         let runtime_env = self
             .environment_config
             .program_runtime_environments_for_execution
-            .program_runtime_v2
+            .program_runtime_v1
             .clone();
 
         let config = self
             .environment_config
             .program_runtime_environments_for_execution
-            .program_runtime_v2.get_config();
+            .program_runtime_v1.get_config();
 
-        let empty_memory_mapping = MemoryMapping::new(
-            Vec::new(),
-            config,
-            SBPFVersion::V0,
-        )
-            .map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
+
 
 
         let mut vm;
         match &entry.program {
             ProgramCacheEntryType::Builtin(program) => {
                 println!("Builtin");
+                let empty_memory_mapping = MemoryMapping::new(
+                    Vec::new(),
+                    config,
+                    SBPFVersion::V0,
+                )
+                    .map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
                 vm = EbpfVm::new(
                     runtime_env,
                     SBPFVersion::V0,
@@ -697,18 +698,24 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
 
                 // 1. 准备内存区域 (增加 Input 和 Stack)
                 // 注意：在真实场景下，parameter_bytes 应该是序列化后的账户数据
-                let mut parameter_bytes = vec![0u8; 4096];
+                // let mut parameter_bytes = vec![0u8; 4096];
                 let stack_size = config.stack_size();
-                let mut stack = vec![0u8; stack_size];
-
-                let mut regions = Vec::with_capacity(3);
-                regions.push(executable.get_ro_region()); // RO 代码区
-                regions.push(MemoryRegion::new_writable(&mut parameter_bytes, ebpf::MM_INPUT_START));
-                regions.push(MemoryRegion::new_writable(&mut stack, ebpf::MM_STACK_START));
-
+                // let mut stack = vec![0u8; stack_size];
+                //
+                // let mut regions = Vec::with_capacity(3);
+                // regions.push(executable.get_ro_region()); // RO 代码区
+                // regions.push(MemoryRegion::new_writable(&mut parameter_bytes, ebpf::MM_INPUT_START));
+                // regions.push(MemoryRegion::new_writable(&mut stack, ebpf::MM_STACK_START));
+                let mut regions = Vec::with_capacity(1);
+                regions.push(executable.get_ro_region());
+                let mut stack_mem = vec![0u8; 4096 * 64];
+                let mut heap_mem = vec![0u8; 256 * 1024];
+                let mut all_regions = regions;
+                all_regions.push(MemoryRegion::new_writable(&mut stack_mem, 0x200000000));
+                all_regions.push(MemoryRegion::new_writable(&mut heap_mem, 0x300000000));
                 // 2. 重新构建完整的 MemoryMapping
                 let memory_mapping = MemoryMapping::new(
-                    regions,
+                    all_regions,
                     config,
                     executable.get_sbpf_version(),
                 ).map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
@@ -721,17 +728,15 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                             &mut InvokeContext,
                         >(self)
                     },
-                    empty_memory_mapping,
+                    memory_mapping,
                     0,
                 );
-                // 3. 注入 VM
-                vm.memory_mapping = memory_mapping;
-                
+
                 // 4. 设置寄存器 (关键：让 R1 指向参数区)
                 // 如果直接访问字段报错，尝试使用内置的寄存器数组索引
                 // R1 的索引是 1，R10 (栈指针) 的索引是 10
                 vm.registers[1] = ebpf::MM_INPUT_START;
-                vm.registers[10] = ebpf::MM_STACK_START + stack_size as u64;
+                vm.registers[2] = ebpf::MM_STACK_START + stack_size as u64;
                 vm.execute_program(executable, false);
             }
 
