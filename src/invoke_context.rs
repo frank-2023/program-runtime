@@ -708,7 +708,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                     .get_feature_set()
                     .provide_instruction_data_offset_in_vm_r2;
 
-                let (parameter_bytes, mut regions, accounts_metadata, instruction_data_offset) =
+                let (parameter_bytes, additional_regions, accounts_metadata, instruction_data_offset) =
                     serialization::serialize_parameters(
                         &instruction_context,
                         stricter_abi_and_runtime_constraints,
@@ -720,16 +720,34 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                 // 代码段（RO Region）必须存在，否则 VM 没法读指令
                 let stack_size = executable.get_config().stack_size();
                 let heap_size = self.get_compute_budget().heap_size; // 默认通常是 32KB
+                let mut heap = vec![0u8; heap_size as usize]; // 别忘了分配堆内存
                 // 3. 准备堆栈空间 (严格对齐生命周期)
                 let mut stack = vec![0u8; stack_size];
-                let mut heap = vec![0u8; heap_size as usize];
                 self.set_syscall_context(SyscallContext {
                     allocator: BpfAllocator::new(heap_size as u64),
                     accounts_metadata: accounts_metadata.clone(),
                 })?;
-                regions.insert(0, executable.get_ro_region());
-                regions.push(MemoryRegion::new_writable(&mut stack, ebpf::MM_STACK_START));
-                regions.push(MemoryRegion::new_writable(&mut heap, ebpf::MM_HEAP_START));
+                // 5. 组装 Regions (核心：严格遵循官方 create_memory_mapping 顺序)
+                let gap = if !executable.get_sbpf_version().dynamic_stack_frames() && config.enable_stack_frame_gaps {
+                    config.stack_frame_size as u64
+                } else {
+                    0
+                };
+                let mut regions = vec![
+                    executable.get_ro_region(), // 0: 只读代码段
+                    MemoryRegion::new_writable_gapped(
+                        &mut stack,
+                        ebpf::MM_STACK_START,
+                        gap,
+                    ),                          // 1: 栈段 (带 Gap)
+                    MemoryRegion::new_writable(
+                        &mut heap,
+                        ebpf::MM_HEAP_START
+                    ),                          // 2: 堆段 (必须在这里！)
+                ];
+
+                // 6. 将序列化产生的账户数据 (additional_regions) 拼接在最后
+                regions.extend(additional_regions);
 
                 // 3. 构建映射（这次包含了代码、数据、堆栈、堆）
                 let memory_mapping = MemoryMapping::new(
@@ -746,7 +764,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                 vm = EbpfVm::new(
                     runtime_env,
                     executable.get_sbpf_version(),
-                    unsafe { std::mem::transmute(self) }, // 绑定 InvokeContext
+                    unsafe { std::mem::transmute::<&mut InvokeContext, &mut InvokeContext>(self) },
                     memory_mapping,
                     stack_size, // 必须与 regions 里的堆栈大小一致
                 );
