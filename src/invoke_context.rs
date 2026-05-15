@@ -1,5 +1,4 @@
 use solana_sbpf::ebpf;
-use solana_sbpf::memory_region::MemoryRegion;
 use {
     crate::{
         execution_budget::{SVMTransactionExecutionBudget, SVMTransactionExecutionCost},
@@ -45,6 +44,7 @@ use {
         rc::Rc,
     },
 };
+use crate::serialization;
 
 pub type BuiltinFunctionWithContext = BuiltinFunction<InvokeContext<'static, 'static>>;
 pub type Executable = GenericExecutable<InvokeContext<'static, 'static>>;
@@ -635,8 +635,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
             .find(&program_id)
             .ok_or(InstructionError::UnsupportedProgramId)?;
 
-        self.transaction_context
-            .set_return_data(program_id, Vec::new())?;
+
 
         let logger = self.get_log_collector();
 
@@ -665,6 +664,8 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
         let mut vm;
         match &entry.program {
             ProgramCacheEntryType::Builtin(program) => {
+                self.transaction_context
+                    .set_return_data(program_id, Vec::new())?;
                 println!("Builtin");
                 let empty_memory_mapping = MemoryMapping::new(
                     Vec::new(),
@@ -695,30 +696,30 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
 
             ProgramCacheEntryType::Loaded(executable) => {
                 println!("Loaded");
+                let stricter_abi_and_runtime_constraints = self
+                    .get_feature_set()
+                    .stricter_abi_and_runtime_constraints;
+                let account_data_direct_mapping = self.get_feature_set().account_data_direct_mapping;
+                let mask_out_rent_epoch_in_vm_serialization = self
+                    .get_feature_set()
+                    .mask_out_rent_epoch_in_vm_serialization;
+                let provide_instruction_data_offset_in_vm_r2 = self
+                    .get_feature_set()
+                    .provide_instruction_data_offset_in_vm_r2;
 
-                // 1. 准备内存区域 (增加 Input 和 Stack)
-                // 注意：在真实场景下，parameter_bytes 应该是序列化后的账户数据
-                // let mut parameter_bytes = vec![0u8; 4096];
-                let stack_size = config.stack_size();
-                // let mut stack = vec![0u8; stack_size];
-                //
-                // let mut regions = Vec::with_capacity(3);
-                // regions.push(executable.get_ro_region()); // RO 代码区
-                // regions.push(MemoryRegion::new_writable(&mut parameter_bytes, ebpf::MM_INPUT_START));
-                // regions.push(MemoryRegion::new_writable(&mut stack, ebpf::MM_STACK_START));
-                let mut regions = Vec::with_capacity(1);
-                regions.push(executable.get_ro_region());
-                let mut stack_mem = vec![0u8; 4096 * 64];
-                let mut heap_mem = vec![0u8; 256 * 1024];
-                let mut all_regions = regions;
-                all_regions.push(MemoryRegion::new_writable(&mut stack_mem, 0x200000000));
-                all_regions.push(MemoryRegion::new_writable(&mut heap_mem, 0x300000000));
-                // 2. 重新构建完整的 MemoryMapping
+                let (_, regions, _, instruction_data_offset) =
+                    serialization::serialize_parameters(
+                        &instruction_context,
+                        stricter_abi_and_runtime_constraints,
+                        account_data_direct_mapping,
+                        mask_out_rent_epoch_in_vm_serialization,
+                    )?;
                 let memory_mapping = MemoryMapping::new(
-                    all_regions,
+                    regions,
                     config,
                     executable.get_sbpf_version(),
-                ).map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
+                )
+                    .map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
                 vm = EbpfVm::new(
                     runtime_env,
                     executable.get_sbpf_version(),
@@ -731,12 +732,10 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                     memory_mapping,
                     0,
                 );
-
-                // 4. 设置寄存器 (关键：让 R1 指向参数区)
-                // 如果直接访问字段报错，尝试使用内置的寄存器数组索引
-                // R1 的索引是 1，R10 (栈指针) 的索引是 10
                 vm.registers[1] = ebpf::MM_INPUT_START;
-                vm.registers[2] = ebpf::MM_STACK_START + stack_size as u64;
+                if provide_instruction_data_offset_in_vm_r2 {
+                    vm.registers[2] = instruction_data_offset as u64;
+                }
                 vm.execute_program(executable, false);
             }
 
