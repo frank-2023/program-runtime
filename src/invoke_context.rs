@@ -730,7 +730,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                         >(self)
                     },
                     memory_mapping,
-                    0,
+                    config.stack_size(),
                 );
                 vm.registers[1] = ebpf::MM_INPUT_START;
                 if provide_instruction_data_offset_in_vm_r2 {
