@@ -665,6 +665,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
         )
             .map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
 
+
         let mut vm = EbpfVm::new(
             runtime_env,
             SBPFVersion::V0,
@@ -677,10 +678,10 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
             empty_memory_mapping,
             0,
         );
-
         match &entry.program {
             ProgramCacheEntryType::Builtin(program) => {
                 println!("Builtin");
+
                 let function = program
                     .get_function_registry()
                     .lookup_by_key(ENTRYPOINT_KEY)
@@ -692,6 +693,12 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
 
             ProgramCacheEntryType::Loaded(executable) => {
                 println!("Loaded");
+                let memory_mapping = MemoryMapping::new(
+                    Vec::from([executable.get_ro_region()]),
+                    config,
+                    SBPFVersion::V0,
+                ).map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
+                vm.memory_mapping = memory_mapping;
                 vm.execute_program(executable, false);
             }
 
