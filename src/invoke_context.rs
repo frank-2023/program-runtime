@@ -718,15 +718,17 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
 
                 // --- 核心修复：添加代码段 ---
                 // 代码段（RO Region）必须存在，否则 VM 没法读指令
-                regions.insert(0, executable.get_ro_region());
-
-                // --- 核心修复：添加堆栈段 ---
-                let stack_size = config.stack_size();
+                let stack_size = executable.get_config().stack_size();
+                let heap_size = self.get_compute_budget().heap_size; // 默认通常是 32KB
+                // 3. 准备堆栈空间 (严格对齐生命周期)
                 let mut stack = vec![0u8; stack_size];
+                let mut heap = vec![0u8; heap_size as usize];
+                self.set_syscall_context(SyscallContext {
+                    allocator: BpfAllocator::new(heap_size as u64),
+                    accounts_metadata: accounts_metadata.clone(),
+                })?;
+                regions.insert(0, executable.get_ro_region());
                 regions.push(MemoryRegion::new_writable(&mut stack, ebpf::MM_STACK_START));
-
-                // --- 核心修复：添加堆空间 (可选但建议) ---
-                let mut heap = vec![0u8; 256 * 1024];
                 regions.push(MemoryRegion::new_writable(&mut heap, ebpf::MM_HEAP_START));
 
                 // 3. 构建映射（这次包含了代码、数据、堆栈、堆）
