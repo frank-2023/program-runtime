@@ -692,7 +692,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
 
             ProgramCacheEntryType::Loaded(executable) => {
                 println!("Loaded");
-                vm.execute_program(executable, true);
+                vm.execute_program(executable, false);
             }
 
             _ => {
