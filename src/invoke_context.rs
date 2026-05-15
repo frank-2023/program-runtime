@@ -1,4 +1,5 @@
 use solana_sbpf::ebpf;
+use solana_sbpf::memory_region::MemoryRegion;
 use {
     crate::{
         execution_budget::{SVMTransactionExecutionBudget, SVMTransactionExecutionCost},
@@ -707,35 +708,55 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                     .get_feature_set()
                     .provide_instruction_data_offset_in_vm_r2;
 
-                let (_, regions, _, instruction_data_offset) =
+                let (_, mut regions, _, instruction_data_offset) =
                     serialization::serialize_parameters(
                         &instruction_context,
                         stricter_abi_and_runtime_constraints,
                         account_data_direct_mapping,
                         mask_out_rent_epoch_in_vm_serialization,
                     )?;
+                // --- 核心修复：添加代码段 ---
+                // 代码段（RO Region）必须存在，否则 VM 没法读指令
+                regions.insert(0, executable.get_ro_region());
+
+                // --- 核心修复：添加堆栈段 ---
+                let stack_size = config.stack_size();
+                let mut stack = vec![0u8; stack_size];
+                regions.push(MemoryRegion::new_writable(&mut stack, ebpf::MM_STACK_START));
+
+                // --- 核心修复：添加堆空间 (可选但建议) ---
+                let mut heap = vec![0u8; 256 * 1024];
+                regions.push(MemoryRegion::new_writable(&mut heap, ebpf::MM_HEAP_START));
+
+                // 3. 构建映射（这次包含了代码、数据、堆栈、堆）
                 let memory_mapping = MemoryMapping::new(
                     regions,
                     config,
                     executable.get_sbpf_version(),
-                )
-                    .map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
+                ).map_err(|e| {
+                    // 建议打印 e，如果是地址冲突，会显示具体的 AccessViolation 详情
+                    println!("MemoryMapping 错误详情: {:?}", e);
+                    InstructionError::ProgramEnvironmentSetupFailure
+                })?;
+
+                // 4. 初始化虚拟机
                 vm = EbpfVm::new(
                     runtime_env,
                     executable.get_sbpf_version(),
-                    unsafe {
-                        std::mem::transmute::<
-                            &mut InvokeContext,
-                            &mut InvokeContext,
-                        >(self)
-                    },
+                    unsafe { std::mem::transmute::<&mut InvokeContext, &mut InvokeContext>(self) },
                     memory_mapping,
-                    config.stack_size(),
+                    stack_size, // 必须与 regions 里的堆栈大小一致
                 );
+
+                // 5. 设置寄存器 (R1, R2, R10 是程序启动的三大支柱)
                 vm.registers[1] = ebpf::MM_INPUT_START;
                 if provide_instruction_data_offset_in_vm_r2 {
                     vm.registers[2] = instruction_data_offset as u64;
                 }
+                // R10 是栈指针，必须指向栈底（最高地址）
+                vm.registers[10] = ebpf::MM_STACK_START + stack_size as u64;
+
+                // 6. 运行
                 vm.execute_program(executable, false);
             }
 
