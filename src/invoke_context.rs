@@ -756,18 +756,14 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                 }
                 // R10 是栈指针，必须指向栈底（最高地址）
                 vm.registers[10] = ebpf::MM_STACK_START + stack_size as u64;
-
+                println!("config.enable_instruction_meter: {:?}",config.enable_instruction_meter);
                 // 6. 运行
-                vm.execute_program(executable, false);
+                let re = vm.execute_program(executable, false);
 
-                let m = self
-                    .get_syscall_context()
-                    .map(|s| s.accounts_metadata.clone())
-                    .unwrap_or_default();
+                println!("Executing instructions: {:?}",re);
                 // 5. 【核心修复 B】将内存结果写回账户
                 println!("parameter_bytes: {:#?}",parameter_bytes.len());
                 println!("accounts_metadata: {:?}",accounts_metadata.len());
-                println!("m: {:?}",m);
             }
 
             _ => {
