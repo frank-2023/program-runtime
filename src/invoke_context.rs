@@ -1,4 +1,5 @@
-
+use solana_sbpf::ebpf;
+use solana_sbpf::memory_region::MemoryRegion;
 use {
     crate::{
         execution_budget::{SVMTransactionExecutionBudget, SVMTransactionExecutionCost},
@@ -693,12 +694,33 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
 
             ProgramCacheEntryType::Loaded(executable) => {
                 println!("Loaded");
+
+                // 1. 准备内存区域 (增加 Input 和 Stack)
+                // 注意：在真实场景下，parameter_bytes 应该是序列化后的账户数据
+                let mut parameter_bytes = vec![0u8; 4096];
+                let stack_size = config.stack_size();
+                let mut stack = vec![0u8; stack_size];
+
+                let mut regions = Vec::with_capacity(3);
+                regions.push(executable.get_ro_region()); // RO 代码区
+                regions.push(MemoryRegion::new_writable(&mut parameter_bytes, ebpf::MM_INPUT_START));
+                regions.push(MemoryRegion::new_writable(&mut stack, ebpf::MM_STACK_START));
+
+                // 2. 重新构建完整的 MemoryMapping
                 let memory_mapping = MemoryMapping::new(
-                    Vec::from([executable.get_ro_region()]),
+                    regions,
                     config,
                     SBPFVersion::V0,
                 ).map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
+
+                // 3. 注入 VM
                 vm.memory_mapping = memory_mapping;
+
+                // 4. 设置寄存器 (关键：让 R1 指向参数区)
+                // 如果直接访问字段报错，尝试使用内置的寄存器数组索引
+                // R1 的索引是 1，R10 (栈指针) 的索引是 10
+                vm.registers[1] = ebpf::MM_INPUT_START;
+                vm.registers[10] = ebpf::MM_STACK_START + stack_size as u64;
                 vm.execute_program(executable, false);
             }
 
