@@ -667,22 +667,22 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
             .map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
 
 
-        let mut vm = EbpfVm::new(
-            runtime_env,
-            SBPFVersion::V0,
-            unsafe {
-                std::mem::transmute::<
-                    &mut InvokeContext,
-                    &mut InvokeContext,
-                >(self)
-            },
-            empty_memory_mapping,
-            0,
-        );
+        let mut vm;
         match &entry.program {
             ProgramCacheEntryType::Builtin(program) => {
                 println!("Builtin");
-
+                vm = EbpfVm::new(
+                    runtime_env,
+                    SBPFVersion::V0,
+                    unsafe {
+                        std::mem::transmute::<
+                            &mut InvokeContext,
+                            &mut InvokeContext,
+                        >(self)
+                    },
+                    empty_memory_mapping,
+                    0,
+                );
                 let function = program
                     .get_function_registry()
                     .lookup_by_key(ENTRYPOINT_KEY)
@@ -710,12 +710,23 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                 let memory_mapping = MemoryMapping::new(
                     regions,
                     config,
-                    SBPFVersion::V0,
+                    executable.get_sbpf_version(),
                 ).map_err(|_| InstructionError::ProgramEnvironmentSetupFailure)?;
-
+                vm = EbpfVm::new(
+                    runtime_env,
+                    executable.get_sbpf_version(),
+                    unsafe {
+                        std::mem::transmute::<
+                            &mut InvokeContext,
+                            &mut InvokeContext,
+                        >(self)
+                    },
+                    empty_memory_mapping,
+                    0,
+                );
                 // 3. 注入 VM
                 vm.memory_mapping = memory_mapping;
-
+                
                 // 4. 设置寄存器 (关键：让 R1 指向参数区)
                 // 如果直接访问字段报错，尝试使用内置的寄存器数组索引
                 // R1 的索引是 1，R10 (栈指针) 的索引是 10
