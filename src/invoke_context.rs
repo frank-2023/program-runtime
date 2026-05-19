@@ -797,7 +797,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                     vm_inner.registers[2] = instruction_data_offset as u64;
                 }
                 println!("start2: {:?}", start.elapsed().as_nanos());
-                let _ = vm_inner.execute_program(executable, true);
+                let _ = vm_inner.execute_program(executable, false);
                 println!("start3: {:?}", start.elapsed().as_nanos());
                 // println!("CU consumed: {}, result: {:?}", cus, result);
                 vm = vm_inner;
