@@ -1,3 +1,4 @@
+use std::time::Instant;
 use solana_sbpf::ebpf;
 use solana_sbpf::memory_region::MemoryRegion;
 use {
@@ -607,6 +608,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
         compute_units_consumed: &mut u64,
         timings: &mut ExecuteTimings,
     ) -> Result<(), InstructionError> {
+        let start = Instant::now();
         const ENTRYPOINT_KEY: u32 = 0x71E3CF81;
 
         let instruction_context =
@@ -661,7 +663,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
 
 
 
-
+        println!("start1: {:?}", start.elapsed().as_nanos());
         let mut vm;
         match &entry.program {
             ProgramCacheEntryType::Builtin(program) => {
@@ -696,7 +698,7 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
             }
 
             ProgramCacheEntryType::Loaded(executable) => {
-                // println!("Loaded");
+                println!("Loaded");
                 let stricter_abi_and_runtime_constraints = self
                     .get_feature_set()
                     .stricter_abi_and_runtime_constraints;
@@ -794,8 +796,9 @@ impl<'a, 'ix_data> InvokeContext<'a, 'ix_data> {
                 if provide_instruction_data_offset_in_vm_r2 {
                     vm_inner.registers[2] = instruction_data_offset as u64;
                 }
-
+                println!("start2: {:?}", start.elapsed().as_nanos());
                 let _ = vm_inner.execute_program(executable, true);
+                println!("start3: {:?}", start.elapsed().as_nanos());
                 // println!("CU consumed: {}, result: {:?}", cus, result);
                 vm = vm_inner;
             }
